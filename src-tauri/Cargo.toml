@@ -1,0 +1,43 @@
+[package]
+name = "video-transcriber"
+version = "0.1.0"
+description = "A local, offline video/audio transcriber with speaker diarization"
+authors = ["SabrSMD"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "video_transcriber_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-store = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+# "bundled" compiles SQLite from source into the binary - no system SQLite
+# library required, matching the app's no-external-dependencies philosophy.
+# Used only for speaker management (list/rename/delete rows in
+# speakers.db); voiceprint enrollment/matching during transcription still
+# goes through engine/voiceprint.py's own sqlite3 connection as before.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

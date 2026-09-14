@@ -1,0 +1,254 @@
+name: Build
+
+# Windows, macOS (Apple Silicon), and Linux (x86_64). Each job builds its own
+# PyInstaller engine sidecar and ffmpeg sidecar under the target-triple naming
+# Tauri's externalBin resolution expects (see src-tauri/tauri.conf.json).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# The default GITHUB_TOKEN is read-only unless a workflow explicitly asks for
+# write access - needed here so softprops/action-gh-release can create the
+# release and attach each platform's installer to it.
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ffmpeg
+        run: choco install ffmpeg -y
+
+      - name: Install engine dependencies
+        working-directory: engine
+        run: |
+          python -m venv venv
+          venv\Scripts\pip.exe install --upgrade pip
+          venv\Scripts\pip.exe install -r requirements.txt
+          venv\Scripts\pip.exe install pyinstaller
+          venv\Scripts\pip.exe uninstall -y typing
+
+      - name: Build engine with PyInstaller
+        working-directory: engine
+        run: >
+          venv\Scripts\pyinstaller.exe --onefile --name engine
+          --collect-all whisperx
+          --collect-all pyannote.audio
+          --collect-all pyannote.pipeline
+          --collect-all onnxruntime
+          --collect-all resemblyzer
+          --copy-metadata pyannote.audio
+          --copy-metadata transformers
+          --copy-metadata torch
+          --copy-metadata huggingface_hub
+          --copy-metadata torchcodec
+          --hidden-import pyannote.audio.pipelines.voice_activity_detection
+          --hidden-import pyannote.audio.pipelines.speaker_diarization
+          --add-data "nltk_data;nltk_data"
+          main.py
+
+      - name: Place sidecar binaries
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri\binaries | Out-Null
+          Copy-Item engine\dist\engine.exe src-tauri\binaries\engine-x86_64-pc-windows-msvc.exe
+          $ffmpegPath = (Get-Command ffmpeg).Source
+          Copy-Item $ffmpegPath src-tauri\binaries\ffmpeg-x86_64-pc-windows-msvc.exe
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build Tauri app
+        run: npm run tauri build
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcriber-windows
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+
+  build-macos:
+    # macos-latest runners are Apple Silicon (arm64) - this job covers M-series
+    # Macs only, matching the target-triple below. Intel Mac support would need
+    # a second job (macos-13 runner) plus its own x86_64-apple-darwin sidecars.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ffmpeg
+        run: brew install ffmpeg
+
+      - name: Install engine dependencies
+        working-directory: engine
+        run: |
+          python3 -m venv venv
+          venv/bin/pip install --upgrade pip
+          venv/bin/pip install -r requirements.txt
+          venv/bin/pip install pyinstaller
+          venv/bin/pip uninstall -y typing
+
+      - name: Build engine with PyInstaller
+        working-directory: engine
+        run: >
+          venv/bin/pyinstaller --onefile --name engine
+          --collect-all whisperx
+          --collect-all pyannote.audio
+          --collect-all pyannote.pipeline
+          --collect-all onnxruntime
+          --collect-all resemblyzer
+          --copy-metadata pyannote.audio
+          --copy-metadata transformers
+          --copy-metadata torch
+          --copy-metadata huggingface_hub
+          --copy-metadata torchcodec
+          --hidden-import pyannote.audio.pipelines.voice_activity_detection
+          --hidden-import pyannote.audio.pipelines.speaker_diarization
+          --add-data "nltk_data:nltk_data"
+          main.py
+
+      - name: Place sidecar binaries
+        run: |
+          mkdir -p src-tauri/binaries
+          cp engine/dist/engine src-tauri/binaries/engine-aarch64-apple-darwin
+          cp "$(command -v ffmpeg)" src-tauri/binaries/ffmpeg-aarch64-apple-darwin
+          chmod +x src-tauri/binaries/engine-aarch64-apple-darwin src-tauri/binaries/ffmpeg-aarch64-apple-darwin
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build Tauri app
+        run: npm run tauri build
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcriber-macos
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ffmpeg \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Install engine dependencies
+        working-directory: engine
+        run: |
+          python3 -m venv venv
+          venv/bin/pip install --upgrade pip
+          venv/bin/pip install -r requirements.txt
+          venv/bin/pip install pyinstaller
+          venv/bin/pip uninstall -y typing
+
+      - name: Build engine with PyInstaller
+        working-directory: engine
+        run: >
+          venv/bin/pyinstaller --onefile --name engine
+          --collect-all whisperx
+          --collect-all pyannote.audio
+          --collect-all pyannote.pipeline
+          --collect-all onnxruntime
+          --collect-all resemblyzer
+          --copy-metadata pyannote.audio
+          --copy-metadata transformers
+          --copy-metadata torch
+          --copy-metadata huggingface_hub
+          --copy-metadata torchcodec
+          --hidden-import pyannote.audio.pipelines.voice_activity_detection
+          --hidden-import pyannote.audio.pipelines.speaker_diarization
+          --add-data "nltk_data:nltk_data"
+          main.py
+
+      - name: Place sidecar binaries
+        run: |
+          mkdir -p src-tauri/binaries
+          cp engine/dist/engine src-tauri/binaries/engine-x86_64-unknown-linux-gnu
+          cp "$(command -v ffmpeg)" src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu
+          chmod +x src-tauri/binaries/engine-x86_64-unknown-linux-gnu src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build Tauri app
+        run: npm run tauri build
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcriber-linux
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri/target/release/bundle/deb/*.deb

@@ -1,0 +1,12 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch
+torchaudio
+whisperx
+pyannote.audio
+resemblyzer
+onnxruntime
+ctranslate2
+nltk
+huggingface_hub
+soundfile
